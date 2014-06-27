@@ -1,0 +1,1 @@
+<?php// $Id: views_handler_filter_node_type.inc,v 1.2 2009/06/02 17:57:48 merlinofchaos Exp $/** * Filter by attendance status */ class views_handler_filter_attendance_status extends views_handler_filter_in_operator {  function get_value_options() {    $this->value_options = attendance_all_statuses();  }}

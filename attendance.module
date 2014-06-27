@@ -1,0 +1,403 @@
+<?php
+/*
+ *  The Attendance Module
+ *  Author: Jeremy Linder
+ *  Website: http://www.thedbj.com
+ *
+ */
+
+
+/* 
+ * Form Delete Error
+ * 
+ * This function deletes a type of error message from the form errors.
+ * 
+ * @param $error
+ *      The key of the error message you wish to delete
+ * @param $from_messages
+ *      Delete the message also from the drupal messages
+ * @return
+ *      If there was an error: The value that was previously held as the error
+ *      Else: FALSE
+ */ 
+
+/* HELPFUL FUNCTIONS */
+function attendance_form_delete_error($error, $from_messages = TRUE) {
+	$errors = form_get_errors();
+	
+	if (!is_array($errors)) return FALSE;
+	
+	if (array_key_exists($error, $errors)) {
+		$msg = $errors[$error];
+		unset($errors[$error]);
+	} else
+		return FALSE;
+	
+	form_set_error(NULL, '', TRUE);
+	foreach($errors as $n=>$v)
+		form_set_error($n, $v);
+	
+	attendance_delete_message($msg, 'error');
+	return $msg;
+}
+
+function attendance_delete_message($message, $type) {
+	if (!array_key_exists('messages', $_SESSION))
+		return FALSE;
+		
+	if (!array_key_exists($type, $_SESSION['messages']))
+		return FALSE;
+		
+	$key = array_search($message, $_SESSION['messages'][$type]);
+	
+	if ($key === FALSE) return;
+	unset($_SESSION['messages'][$type][$key]);
+	if (!sizeof($_SESSION['messages'][$type]))
+		unset($_SESSION['messages'][$type]);
+}
+
+/* API */
+/*******/
+
+/* Global Level */
+function attendance_default_statuses() {
+	return array('yes' => 'Attending', 'maybe' => 'Not Sure', 'no' => 'Not Attending');
+}
+
+function attendance_all_statuses() {
+	return variable_get('attendance_default_types', attendance_default_statuses());
+}
+
+function attendance_add_statuses($id, $status) {
+	$statuses = attendance_all_statuses();
+	$statuses[$id] = $status;
+	variable_set('attendance_default_types', $statuses);
+}
+
+/* Type Level */
+function attendance_all_node_types() {
+	return variable_get('attendance_node_types', array());
+}
+
+function attendance_node_type_statuses($type) {
+	$statuses = attendance_node_type_get_setting($type, 'statuses');
+	return $statuses ? $statuses : attendance_all_statuses();
+}
+
+function attendance_node_type_add($type) {
+	$content_types = content_types();
+	if (!array_key_exists($type, $content_types)) return;
+	
+	$types = attendance_all_node_types();
+	if (in_array($type, $types)) return TRUE;
+
+	$sql = "INSERT INTO attendance_node_types (`type`) VALUES ('%s')";
+	if(!db_query($sql, $type)) return FALSE;
+	
+	$types[$type] = $type;
+	variable_set('attendance_node_types', $types);
+	
+	return TRUE;
+}
+
+function attendance_node_type_delete($type) {	
+	$types = attendance_all_node_types();
+	$sql = "DELETE FROM attendance_node_types WHERE `type`= '%s'";
+	if(!db_query($sql, $type)) return FALSE;
+	
+	unset($types[$type]);
+	variable_set('attendance_node_types', $types);
+	
+	return TRUE;
+}
+
+function attendance_node_type_settings($type) {
+	$sql = "SELECT * FROM attendance_node_types WHERE `type`='%s'";
+	$results = db_query($sql, $type);
+	
+	$type = db_fetch_object($results);
+	if (!$type) return FALSE;
+	
+	if ( ($type->settings = unserialize($type->settings)) === FALSE) $type->settings = array();
+	return $type->settings;
+}
+
+function attendance_node_type_save_settings($type, $settings) {
+	$sql = "UPDATE attendance_node_types SET `settings`= '%s' WHERE `type`='%s'";
+	return db_query($sql, serialize($settings), $type);
+}
+
+function attendance_node_type_add_setting($type, $key, $value) {
+	if(!$key) return;
+	
+	$settings = attendance_node_type_settings($type);
+	$settings[$key] = $value;
+	
+	attendance_node_type_save_settings($type, $settings);
+}
+
+function attendance_node_type_get_setting($type, $key) {
+	if(!$key) return;
+	
+	$settings = attendance_node_type_settings($type);
+	if (!is_array($settings)) return false;
+	return array_key_exists($key, $settings) ? $settings[$key] : false;
+}
+
+
+/* Node Level */
+function attendance_add_status_to_node($node, $status) {
+	
+}
+
+function attendance_node_statuses($node) {
+	if (!$node->nid) return array();
+	$statuses = attendance_node_get_setting($node, 'statuses');
+	if (!$statuses)
+		$statuses = attendance_node_type_get_setting($node->type, 'statuses');
+	
+	return $statuses ? $statuses : attendance_node_type_statuses($node->type);
+}
+
+function attendance_node_settings($node) {
+	$sql = "SELECT * FROM attendance_nodes WHERE `nid`='%d'";
+	$results = db_query($sql, $node->nid);
+	
+	$thenode = db_fetch_object($results);
+	if (!$thenode) return FALSE;
+	
+	if ( ($thenode->settings = unserialize($thenode->settings)) === FALSE) $thenode->settings = array();
+	return $thenode->settings;
+}
+
+function attendance_node_save_settings($node, $settings) {
+	$sql = "UPDATE attendance_nodes SET `settings`= '%s' WHERE `nid`='%d'";
+	return db_query($sql, serialize($settings), $node->nid);
+}
+
+function attendance_node_add_setting($node, $key, $value) {
+	if(!$key) return;
+	
+	$settings = attendance_node_settings($node);
+	$settings[$key] = $value;
+	
+	attendance_node_save_settings($node, $settings);
+}
+
+function attendance_node_get_setting($node, $key) {
+	if(!$key) return;
+	
+	$settings = attendance_node_settings($node);
+	return is_array($settings) && array_key_exists($key, $settings) ?  $settings[$key] : false;
+}
+
+
+
+/* Node User Level */
+
+function attendance_set_user_status($node, $user, $status) {
+	if(!$node->nid || !$user->uid) return FALSE;
+	
+	if (!attendance_has_access($node, $user)) return FALSE;
+	
+	// If the status isn't valid for this node, 
+	$statuses = attendance_node_statuses($node);
+	if (!array_key_exists($status, $statuses)) return FALSE;
+	
+	// If it exists and the status is the same, then nevermind.
+	$existing = attendance_get_user_status($node, $user);
+	if ($existing !== FALSE && $existing == $status) return;
+	
+	// THIS IS A REPLACE COMMAND. If we allow settings here, this must be changed to an update and an insert!
+	// TODO: Make option to keep place in line or give new place.
+	$sql = "REPLACE INTO attendance_node_users (`nid`, `uid`, `status`) VALUES (%d, %d, '%s')";
+	return db_query($sql, $node->nid, $user->uid, $status);
+}
+
+function attendance_get_user_status($node, $user) {
+	if(!$node->nid || !$user->uid) return FALSE;
+
+	$sql = "SELECT * FROM attendance_node_users WHERE nid=%d AND uid=%d";
+	$results = db_query($sql, $node->nid, $user->uid);
+	
+	$status = db_fetch_object($results);
+	return $status ? $status->status : FALSE;
+}
+
+function attendance_get_users_for_status($node, $status, $settings = FALSE) {
+	if (!$node->nid) return array();
+	
+	if (!$settings) $settings = array();	
+	$full = array_key_exists('full', $settings);
+	
+	$settings['where'] = array("a.status = '%s'");
+
+	$sql = _attendance_build_users_query($settings, $full);
+	$results = db_query($sql, $node->nid, $status);
+	
+	return _attendance_collect_users($results, $full);
+}
+
+
+function attendance_get_all_users($node, $settings = FALSE) {
+	if (!$settings) $settings = array();	
+	$full = array_key_exists('full', $settings);
+	
+	$settings['where'] = FALSE;
+	
+	$sql = _attendance_build_users_query($settings, $full);
+	$results = db_query($sql, $node->nid);
+	
+	return _attendance_collect_users($results, $full);
+}
+
+
+/* HOOKS */
+
+  
+function attendance_has_access($node, $user) {
+  $booleans = module_invoke_all('attendance_access', $node, $user);
+  foreach($booleans as $b)
+	if (!$b) return FALSE;	
+  return TRUE;
+}
+
+/**************/
+/* END OF API */
+
+
+/* PRIVATE FUNCTIONS */
+/*********************/
+
+function _attendance_build_users_query($settings, $full = FALSE) {	
+	$sql = "SELECT " . ($full ? "u.*" : "a.uid") . " FROM attendance_node_users a "
+			. ($full ? "JOIN users u ON (u.uid = a.uid) " : "") . " WHERE a.nid = %d";
+			
+	if(array_key_exists('where', $settings) && is_array($settings['where']))
+	{
+		$where = implode(" AND ", $where);
+		$sql .= " AND " . $where;
+	}
+	
+	return $sql;
+}
+
+function _attendance_collect_users($results, $full = FALSE) {
+	$users = array();
+	while ($u = db_fetch_object($results)) {
+		$users[] = $full ? $u : $u->uid;
+	}
+	
+	return $users;
+}
+
+/* DEBUGGING */
+
+function attendance_debug_page() {
+
+}
+
+
+/* HOOK INTO DRUPAL */
+
+function attendance_menu() {
+	$items = array();
+	$items['attendance_debug'] = array (
+		'page callback' => 'attendance_debug_page',
+		'access arguments' => array('access content')
+	);
+	return $items;
+}
+
+
+/**
+ * Implementation of hook_views_api().
+ *
+ * This one is used as the base to reduce errors when updating.
+ */
+
+function attendance_views_api() {
+  return array(
+    'api' => 2,
+    'path' => drupal_get_path('module', 'attendance') .'/views',
+  );
+}
+
+/* 
+ * Implementation of the hook_form_alter for the form that edits node types
+ *
+ */
+
+function attendance_form_node_type_form_alter(&$form, $form_state) {
+
+	if ( ($fields = attendance_form_valid_types($form['old_type']['#value'])) === FALSE)
+		return;
+	
+	$form['attendance'] = array (
+		'#type' => 'fieldset',
+		'#title' => t('Attendance'),
+		'#collapsible' => TRUE
+	);
+	
+	$form['attendance']['attendance_field'] = array (
+		'#type' => 'select',
+		'#title' => t('Date to mark attendance for'),
+		'#options' => array_merge(array('0' => '--None--'), $fields),
+		'#default_value' => attendance_node_type_get_setting($form['old_type']['#value'], 'field')
+	);
+	
+	$form['#submit'][] = '_attendance_form_node_type_form_submit';
+}
+
+function attendance_form_alter(&$form, $form_state, $form_id) {
+	foreach(attendance_all_node_types() as $node_type)  {
+	  if ($form_id == $node_type."_node_form") {
+	  /*
+	    $form['attendance'] = array (
+		  '#type' => 'fieldset',
+		  '#title' => t('Attendance'),
+		  '#collapsible' => TRUE
+	      );
+		
+		/*
+		
+		$form['attendance']['description'] = array (
+		  '#value' => t("The field for attendance of this form is: " . attendance_node_type_get_setting($node_type, 'field'))
+		);
+		*/
+	  }
+	  
+	}
+}
+
+function attendance_form_valid_types($type) {
+ 	$content = content_types($type);
+	
+	$fields = array();
+	if (!$content['fields']) return $fields;
+	foreach($content['fields'] as $field => $v)
+		if ($v['type'] == 'date') 
+			$fields[$field] = $v['widget']['label'];
+		
+	if (!sizeof($fields)) return FALSE;
+	return $fields;
+}
+
+/*
+ * This function if off of the #submit for the edit form. It saves the attendance values 
+ */ 
+ 
+function _attendance_form_node_type_form_submit($form, &$form_state) {
+	if (!array_key_exists('attendance_field', $form_state['values'])) return;
+	
+	$type = $form['old_type']['#value'];
+	if($form_state['values']['attendance_field']) {
+		if(attendance_node_type_add($type))
+			attendance_node_type_add_setting($type, 'field', $form_state['values']['attendance_field']);
+			
+	} else {
+		attendance_node_type_delete($type);
+	}
+}
+
+

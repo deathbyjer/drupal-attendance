@@ -1,0 +1,233 @@
+<?php
+
+  function attendance_widgets_form_alter(&$form, $form_state, $form_id) {
+	
+    if ($form_id == 'node_type_form') {	
+	
+	  if ( attendance_form_valid_types($form['old_type']['#value']) === FALSE )
+		  return;
+		  
+	  $widgets = array();
+	  foreach (attendance_widgets_all_widgets() as $k=>$v)
+	    $widgets[$k] = !empty($v['title']) ? $v['title'] : $k;
+		
+	  $form['attendance']['widgets'] = array(
+	    '#title' => t('Widgets'),
+		'#type' => 'fieldset',
+		'#collapsible' => FALSE
+	  );
+		
+	  $form['attendance']['widgets']['attendance_select_widget'] = array (
+        '#title' => t('Select a default attendance widget'),
+		'#type' => 'select',
+		'#options' => array_merge(array(""=>"--None--"), $widgets),
+		'#default_value'=> attendance_node_type_get_setting($form['old_type']['#value'], 'widget')
+	  );
+	  
+	  $ss = attendance_node_type_get_setting($form['old_type']['#value'], 'subsection_widgets');
+	  $form['attendance']['widgets']['attendance_subsection_widgets'] = array (
+        '#title' => t('Allow different widgets for every node?'),
+		'#type' => 'radios',
+		'#options' => array('0' => t('No'), '1' => t('Yes')),
+		'#default_value' => $ss ? $ss : '0'
+	  );
+	  
+	  $form['#submit'][] = '_attendance_widgets_form_node_type_submit';
+	}
+  
+	// We have to add the select widget to each creation form for attendance node types.
+	foreach(attendance_all_node_types() as $node_type) 
+	  if ($form_id == $node_type."_node_form" && attendance_node_type_get_setting($node_type, 'subsection_widgets')) {
+		  $form['attendance']['widgets'] = array(
+			'#title' => t('Widgets'),
+			'#type' => 'fieldset',
+			'#collapsible' => FALSE
+		  );
+			
+		  $form['attendance']['widgets']['attendance_select_widget'] = array (
+			'#title' => t('Select a default attendance widget'),
+			'#type' => 'select',
+			'#options' => array_merge(array(""=>"--None--"), $widgets),
+			'#default_value'=> attendance_node_type_get_setting($form['old_type']['#value'], 'widget')
+		  );
+		  
+		  $ss = attendance_node_type_get_setting($form['old_type']['#value'], 'subsection_widgets');
+		  $form['attendance']['widgets']['attendance_subsection_widgets'] = array (
+			'#title' => t('Allow different widgets for every node?'),
+			'#type' => 'radios',
+			'#options' => array('0' => t('No'), '1' => t('Yes')),
+			'#default_value' => $ss ? $ss : '0'
+		  );	    
+	  }
+	
+  }
+  
+  function attendance_widgets_show($node, $user) {	
+	if (empty($node->type)) return;
+	if (!array_key_exists($node->type, attendance_all_node_types())) return;
+	
+	if (attendance_has_access($node, $user)) {
+	  $widget = false;
+	  $widget = attendance_node_get_setting($node, 'widget');
+	  if (!$widget)
+		$widget = attendance_node_type_get_setting($node->type, 'widget');
+	
+		
+	  if (!$widget) return;
+	  $widgets = attendance_widgets_all_widgets();
+	  if (!array_key_exists($widget, $widgets)) return;
+	  if (!array_key_exists('callback', $widgets[$widget])) return;
+	  // Now the widget-level access function
+	  if (array_key_exists('access', $widgets[$widget])) {
+	    // Build the arguments array
+		$args = array();
+		if (is_array($widgets[$widget]['access arguments'])) {
+		  foreach($widgets[$widget]['access arguments'] as $a) {
+		    switch($a) {
+			  case 1: $args[] = $node; break;
+			  case 2: $args[] = $user; break;
+			  default: $args[] = $a;
+			}
+		  }
+		}
+		// If the function returns false, then we don't have access and just return blank
+		if(!call_user_func_array($widgets[$widget]['access'], $args))
+			return;
+	  }
+	  
+	  // We've passed the widget-level access. Now time to show whatever this is.
+	  
+	  // Build the arguments array
+	  
+	  if (is_array($widgets[$widget]['callback arguments'])) {
+	    foreach($widgets[$widget]['callback arguments'] as $a) {
+		  switch($a) {
+		    case 1: $args[] = $node; break;
+		    case 2: $args[] = $user; break;
+		    default: $args[] = $a;
+		  }
+		}
+	  }
+	  
+	  return sizeof($args) ? call_user_func_array($widgets[$widget]['callback'], $args) : call_user_func($widgets[$widget]['callback']);
+	}
+	return;
+  }
+  
+  
+  function attendance_widgets_all_widgets() {
+	$widgets = module_invoke_all('attendance_widget');
+	return $widgets;
+  }
+  
+  
+  /*
+   * Implementation of hook_attendance_widget.
+   *
+   * Note the following built-in arguments. These strings will be turned into
+   * the objects that they represent.
+   *
+   *     node:string - the node being operated on
+   *     user:string - the user being operated on
+   */
+   
+  function attendance_widgets_attendance_widget() {
+	$widgets = array();
+	$widgets['simple options'] = array (
+	  "title" => t("Simple Options"),
+	  "callback" => "drupal_get_form",
+	  "callback arguments" => array('simple_options_view_function', 1,2)
+//	  "access" => "access_function",
+//	  "access args" => array()
+	);
+	
+	return $widgets;
+  }
+ 
+  function attendance_widgets_forms($form_id, $args) {
+    $forms = array();
+    $forms['attendance_simple_options'] = array(
+		'callback' => 'simple_options_view_function',
+		'callback arguments' => $args
+	);
+	
+	return $forms;
+  }
+  
+  function simple_options_view_function($form_state, $node, $user) {
+	$form['status'] = array (
+		'#title' => t('Attending Status'),
+		'#type' => 'radios',
+		'#options' => attendance_all_statuses(),
+		'#default_value' => attendance_get_user_status($node, $user)
+	);
+	
+	$form['submit'] = array (
+		'#type' => 'submit',
+		'#value' => t('Respond')
+	);
+	
+	$form['#user'] = array (
+		'#type' => 'value',
+		'#value' => $user->uid
+	);
+	
+	$form['#node'] = array (
+		'#type' => 'value',
+		'#value' => $node->nid
+	);
+	
+	$form['#submit'][] = 'simple_options_view_submit';
+	
+    return $form;
+  }
+  
+  function simple_options_view_submit($form, $form_state) {
+	$node = node_load($form['#node']['#value']);
+	$user = user_load(array('uid'=>$form['#user']['#value']));
+	attendance_set_user_status($node, $user, $form_state['values']['status']);
+  }
+  
+  
+  function attendance_widgets_block($op = 'list', $delta = 0, $edit = array()) {
+    switch($op) {
+  	  case 'list': 
+	    $blocks[0] = array  (
+	      'info' => t('Attendance Widgets: Widget')
+	    );
+        return $blocks;
+	  
+	  case 'view': 
+	    $block = array();
+	    switch($delta) {
+          case 0: 		  
+            global $user;
+			// Sort of a hacky way to get the node.
+            if ( arg(0) == 'node' && is_numeric(arg(1)) && ! arg(2) )
+              $node = node_load(arg(1));
+            else 
+			  break;	
+			
+		    $block['subject'] = "";
+		    $block['content'] = attendance_widgets_show($node, $user);
+		    break;
+        }	  
+	    return $block;
+    }
+  }
+  
+  
+  /* Private functions */
+  
+  function _attendance_widgets_form_node_type_submit($form, &$form_state) {
+	$type = $form['old_type']['#value'];
+	$types = attendance_all_node_types();
+	if (!array_key_exists($type, $types)) return;
+	
+	attendance_node_type_add_setting($type, 'widget', $form_state['values']['attendance_select_widget']);
+	attendance_node_type_add_setting($type, 'subsection_widgets', $form_state['values']['attendance_subsection_widgets']);
+  }
+  
+  
+  
+  

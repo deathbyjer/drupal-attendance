@@ -1,0 +1,6 @@
+; $Id
+name = Attendance
+core = 6.x
+package = Attendance
+description = Manages attending statuses of users for event-type nodes
+

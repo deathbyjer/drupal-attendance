@@ -1,0 +1,103 @@
+<?php
+
+function attendance_schema() {
+	$schema = array();
+	$schema['attendance_node_types'] = array (
+		'description' => t('Global settings for node types'),
+		'fields' => array (
+			'type' => array (
+				'description' => t('The node type'),
+				'type' => 'varchar',
+				'length' => 127,
+				'not null' => true
+			),
+			'settings' => array (
+				'description' => t('Serialized settings array'),
+				'type' => 'text',
+				'not null' => false
+			)
+		),
+		'primary key' => array ('type')	
+	);
+	
+	$schema['attendance_nodes'] = array (
+		'description' => t('Individual nodes that have attendance marking'),
+		'fields' => array (
+			'nid' => array (
+				'description' => t('The id of the node'),
+				'type' => 'int',
+				'length' => 10,
+				'unsigned' => TRUE,
+				'not null' => TRUE
+			),
+			'field' => array (
+				'description' => t('The field on which the attendance is based'),
+				'type' => 'varchar',
+				'length' => 127,
+				'not null' => true
+			),
+			'settings' => array (
+				'description' => t('Serialized settings array'),
+				'type' => 'text',
+				'not null' => false
+			)	
+		),
+		'primary key' => array ('nid')	
+	);
+	
+	
+	$schema['attendance_node_users'] = array (
+		'description' => t('The list of users and their statuses for this node'),
+		'fields' => array (
+			'attendance_id' => array (
+				'description' => t('The id of the attendance user statuses'),
+				'type' => 'serial',
+				'unsigned' => TRUE,
+				'not null' => TRUE
+			),
+			'nid' => array (
+				'description' => t('The id of the node'),
+				'type' => 'int',
+				'length' => 10,
+				'unsigned' => TRUE,
+				'not null' => TRUE
+			),
+			'uid' => array (
+				'description' => t('The id of the user'),
+				'type' => 'int',
+				'length' => 10,
+				'unsigned' => TRUE,
+				'not null' => TRUE
+			),
+			'status' => array (
+				'description' => t('The status of the user'),
+				'type' => 'varchar',
+				'length' => 127,
+				'not null' => true
+			)
+		),
+		'indexes' => array (
+			'statuses' => array('status')
+		),
+		'unique keys' => array (
+		  'nid_uid' => array ('nid', 'uid')
+        ),
+		'primary key' => array('attendance_id')
+	);
+	
+	return $schema;
+}
+
+function attendance_install() {
+  // Create my tables.
+  drupal_install_schema('attendance');
+  variable_set('attendance_default_statuses', array('yes' => 'Attending', 'maybe' => 'Not Sure', 'no' => 'Not Attending'));
+  variable_set('attendance_node_types', array());
+}
+
+function attendance_uninstall() {
+  // Drop my tables.
+  drupal_uninstall_schema('attendance');
+  variable_del('attendance_default_statuses');
+  variable_del('attendance_node_types');
+}

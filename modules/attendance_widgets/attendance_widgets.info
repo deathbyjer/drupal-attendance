@@ -1,0 +1,6 @@
+; $Id
+name = Attendance Widgets
+core = 6.x
+package = Attendance
+description = Required class for viewing widgets to respond to attendance. Includes some widgets.
+dependencies[] = attendance
